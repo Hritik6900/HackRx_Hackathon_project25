@@ -16,7 +16,8 @@ from langchain.chains import ConversationalRetrievalChain
 import io
 import tempfile
 import shutil
-
+import chromadb
+from chromadb.config import Settings
 
 load_dotenv()
 
@@ -42,7 +43,6 @@ class QuestionResponse(BaseModel):
     processing_time: Optional[float] = None
     answers: List[dict]
     metadata: Optional[dict] = None
-
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_KEY:
@@ -137,7 +137,6 @@ def download_pdf_optimized(url: str) -> str:
     except Exception as e:
         raise HTTPException(400, f"PDF error: {str(e)}")
 
-
 def get_text_chunks(text: str):
     """Split text into chunks with metadata"""
     text_splitter = CharacterTextSplitter(
@@ -150,7 +149,7 @@ def get_text_chunks(text: str):
     return chunks
 
 def setup_enhanced_qa_system(pdf_text: str):
-    """Enhanced: Setup QA system with better retrieval"""
+    """Enhanced: Setup QA system with new Chroma client"""
     try:
         text_chunks = get_text_chunks(pdf_text)
         
@@ -158,13 +157,22 @@ def setup_enhanced_qa_system(pdf_text: str):
             raise ValueError("No text chunks generated from PDF")
         
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-        temp_dir = tempfile.mkdtemp()
         
-        vectorstore = Chroma.from_texts(
-            texts=text_chunks, 
-            embedding=embeddings,
-            persist_directory=temp_dir
+        # NEW: Updated Chroma initialization
+        chroma_client = chromadb.Client(Settings(
+            anonymized_telemetry=False,
+            is_persistent=False
+        ))
+        
+        collection_name = f"collection_{int(time.time())}"
+        
+        vectorstore = Chroma(
+            client=chroma_client,
+            collection_name=collection_name,
+            embedding_function=embeddings
         )
+        
+        vectorstore.add_texts(texts=text_chunks)
         
         # Enhanced: More precise retrieval
         llm = ChatGoogleGenerativeAI(
@@ -181,7 +189,7 @@ def setup_enhanced_qa_system(pdf_text: str):
             return_source_documents=True  # Get source docs for clauses
         )
         
-        return conversation_chain, temp_dir, vectorstore
+        return conversation_chain, None, vectorstore
         
     except Exception as e:
         raise HTTPException(
@@ -340,12 +348,8 @@ async def process_questions(
             metadata={"error": str(e)}
         )
     finally:
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-            except:
-                pass
-
+        # No cleanup needed for in-memory Chroma
+        pass
 
 @app.post("/webhook/callback")
 async def webhook_callback(request: Request):
