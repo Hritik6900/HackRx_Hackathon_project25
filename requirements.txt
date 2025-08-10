@@ -1,5 +1,5 @@
 langchain==0.0.310
-langchain-community==0.0.41
+langchain-community==0.3.27
 pydantic>=2.0.0,<3
 PyPDF2==3.0.1
 python-dotenv==1.1.1
@@ -16,8 +16,6 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 requests==2.31.0
 httpx==0.25.2
-
-
 
 # uncomment to use huggingface llms
 # huggingface-hub==0.14.1
