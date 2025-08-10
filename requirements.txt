@@ -8,7 +8,6 @@ altair==4
 tiktoken==0.4.0
 langchain-google-genai
 google-generativeai
-chromadb
 sentence-transformers
 transformers
 fastapi==0.104.1
@@ -16,6 +15,7 @@ uvicorn[standard]==0.24.0
 requests==2.31.0
 pydantic>=1.0,<2.0
 httpx==0.25.2
+
 
 
 # uncomment to use huggingface llms
