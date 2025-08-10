@@ -1,3 +1,4 @@
+import sys
 from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -183,6 +184,50 @@ async def send_webhook(webhook_url: str, data: dict):
     except Exception as e:
         print(f"Webhook delivery failed: {e}")
         return False
+
+@app.get("/debug")
+async def debug_info():
+    try:
+        import langchain
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+        import google.generativeai as genai
+        
+        # Test Google API key
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY not found")
+            
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        test_response = model.generate_content("Test message")
+        
+        # Test embeddings
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="models/embedding-001",
+            google_api_key=api_key
+        )
+        
+        # Test PDF access
+        pdf_url = "https://hackrx.blob.core.windows.net/assets/policy.pdf?sv=2023-01-03&st=2025-07-04T09%3A11%3A24Z&se=2027-07-05T09%3A11%3A00Z&sr=b&sp=r&sig=N4a9OU0w0QXO6AOIBiu4bpl7AXvEZogeT%2FjUHNO7HzQ%3D"
+        pdf_response = requests.get(pdf_url, timeout=10)
+        
+        return {
+            "status": "debug_success",
+            "langchain_version": langchain._version_,
+            "google_api_key_exists": bool(api_key),
+            "google_api_test": test_response.text[:100] if test_response.text else "No response",
+            "embeddings_test": "Success",
+            "pdf_access_status": pdf_response.status_code,
+            "pdf_size": len(pdf_response.content),
+            "python_version": sys.version[:50]
+        }
+    except Exception as e:
+        return {
+            "status": "debug_failed", 
+            "error": str(e),
+            "error_type": type(e)._name_,
+            "google_api_key_exists": bool(os.getenv("GOOGLE_API_KEY"))
+        }
 
 @app.post("/hackrx/run")
 async def process_questions(
