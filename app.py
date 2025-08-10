@@ -8,7 +8,8 @@ from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from htmlTemplates import css, bot_template, user_template
 from langchain.llms import HuggingFaceHub
-# from langchain.embeddings import HuggingFaceInstructEmbeddings
+from langchain.embeddings import HuggingFaceInstructEmbeddings
+from requests.exceptions import HTTPError
 
 def get_pdf_text(pdf_docs):
     text = ""
@@ -17,7 +18,6 @@ def get_pdf_text(pdf_docs):
         for page in pdf_reader.pages:
             text += page.extract_text()
     return text
-
 
 def get_text_chunks(text):
     text_splitter = CharacterTextSplitter(
@@ -29,9 +29,6 @@ def get_text_chunks(text):
     chunks = text_splitter.split_text(text)
     return chunks
 
-
-from requests.exceptions import HTTPError
-
 def get_vectorstore(text_chunks):
     try:
         # Updated: Latest Gemini embeddings model
@@ -41,25 +38,19 @@ def get_vectorstore(text_chunks):
         return vectorstore
     except HTTPError as e:
         st.warning(f"Gemini API HTTP error: {e}. Using HuggingFace embeddings (free)...")
-        st.warning(f"Gemini API HTTP error: {e}. Using HuggingFace embeddings (free)...")
-        from langchain.embeddings import HuggingFaceInstructEmbeddings
         embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
         vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
         return vectorstore
     except ValueError as e:
         st.warning(f"Gemini API value error: {e}. Using HuggingFace embeddings (free)...")
-        from langchain.embeddings import HuggingFaceInstructEmbeddings
         embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
         vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
         return vectorstore
     except Exception as e:
         st.warning(f"Unexpected error: {e}. Using HuggingFace embeddings (free)...")
-        from langchain.embeddings import HuggingFaceInstructEmbeddings
         embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
         vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
         return vectorstore
-        vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
-from requests.exceptions import HTTPError
 
 def get_conversation_chain(vectorstore):
     try:
@@ -89,7 +80,6 @@ def get_conversation_chain(vectorstore):
     )
     return conversation_chain
 
-
 def handle_userinput(user_question):
     response = st.session_state.conversation({'question': user_question})
     st.session_state.chat_history = response['chat_history']
@@ -101,7 +91,6 @@ def handle_userinput(user_question):
         else:
             st.write(bot_template.replace(
                 "{{MSG}}", message.content), unsafe_allow_html=True)
-
 
 def main():
     load_dotenv()
@@ -137,7 +126,6 @@ def main():
                 # create conversation chain
                 st.session_state.conversation = get_conversation_chain(
                     vectorstore)
-
 
 if __name__ == '__main__':
     main()
