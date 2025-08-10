@@ -1,4 +1,5 @@
-langchain==0.3.0
+langchain==0.0.240
+langchain-community==0.0.35
 PyPDF2==3.0.1
 python-dotenv==1.1.1
 streamlit==1.48.0
