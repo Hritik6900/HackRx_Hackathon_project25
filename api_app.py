@@ -11,12 +11,11 @@ from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain.vectorstores import Chroma
+from langchain.vectorstores import FAISS
 from langchain.chains import ConversationalRetrievalChain
 import io
 import tempfile
 import shutil
-
 
 load_dotenv()
 
@@ -28,21 +27,7 @@ API_KEY = os.getenv("API_KEY", "hackrx-api-key-2025")
 class QuestionRequest(BaseModel):
     documents: str
     questions: List[str]
-    webhook_url: Optional[str] = None  # Enhanced: Optional webhook support
-
-class EnhancedAnswer(BaseModel):
-    answer: str
-    matched_clauses: List[dict]
-    rationale: str
-    confidence: float
-
-class QuestionResponse(BaseModel):
-    success: bool = True
-    status: str = "completed"
-    processing_time: Optional[float] = None
-    answers: List[dict]
-    metadata: Optional[dict] = None
-
+    webhook_url: Optional[str] = None
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_KEY:
@@ -137,7 +122,6 @@ def download_pdf_optimized(url: str) -> str:
     except Exception as e:
         raise HTTPException(400, f"PDF error: {str(e)}")
 
-
 def get_text_chunks(text: str):
     """Split text into chunks with metadata"""
     text_splitter = CharacterTextSplitter(
@@ -150,7 +134,7 @@ def get_text_chunks(text: str):
     return chunks
 
 def setup_enhanced_qa_system(pdf_text: str):
-    """Enhanced: Setup QA system with better retrieval"""
+    """Enhanced: Setup QA system with FAISS (ChromaDB replacement)"""
     try:
         text_chunks = get_text_chunks(pdf_text)
         
@@ -158,13 +142,9 @@ def setup_enhanced_qa_system(pdf_text: str):
             raise ValueError("No text chunks generated from PDF")
         
         embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-        temp_dir = tempfile.mkdtemp()
         
-        vectorstore = Chroma.from_texts(
-            texts=text_chunks, 
-            embedding=embeddings,
-            persist_directory=temp_dir
-        )
+        # FAISS instead of ChromaDB - No build issues!
+        vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
         
         # Enhanced: More precise retrieval
         llm = ChatGoogleGenerativeAI(
@@ -181,7 +161,7 @@ def setup_enhanced_qa_system(pdf_text: str):
             return_source_documents=True  # Get source docs for clauses
         )
         
-        return conversation_chain, temp_dir, vectorstore
+        return conversation_chain, None, vectorstore
         
     except Exception as e:
         raise HTTPException(
@@ -204,15 +184,12 @@ async def send_webhook(webhook_url: str, data: dict):
         print(f"Webhook delivery failed: {e}")
         return False
 
-@app.post("/hackrx/run", response_model=QuestionResponse)
+@app.post("/hackrx/run")
 async def process_questions(
     request: QuestionRequest,
     token: str = Depends(verify_token)
 ):
-    """Speed-optimized processing with status tracking"""
-    start_time = time.time()
-    temp_dir = None
-    
+    """Speed-optimized processing - returns simple answers array"""
     try:
         # Validation
         if not request.documents:
@@ -221,8 +198,8 @@ async def process_questions(
         if not request.questions:
             raise HTTPException(400, "At least one question is required")
         
-        # Limit questions for speed
-        questions = request.questions[:3]  # Max 3 questions
+        # Process all questions (no limit for hackathon)
+        questions = request.questions
         
         # Fast processing with timeout
         async def fast_process():
@@ -279,7 +256,7 @@ async def process_questions(
                                 })
                         
                         answers.append({
-                            "answer": raw_answer[:500],
+                            "answer": raw_answer[:500] if raw_answer else "Unable to generate answer",
                             "matched_clauses": matched_clauses,
                             "rationale": "Generated from document analysis",
                             "confidence": 0.75
@@ -287,7 +264,7 @@ async def process_questions(
                         
                 except Exception as e:
                     answers.append({
-                        "answer": f"Error processing question: {str(e)}",
+                        "answer": f"Unable to process this question due to processing constraints",
                         "matched_clauses": [],
                         "rationale": "Error occurred during processing",
                         "confidence": 0.0
@@ -297,55 +274,36 @@ async def process_questions(
         
         # Execute with timeout
         answers = await asyncio.wait_for(fast_process(), timeout=25.0)
-        processing_time = time.time() - start_time
         
-        # Create response with status
-        final_response = QuestionResponse(
-            success=True,
-            status="completed",
-            processing_time=round(processing_time, 2),
-            answers=answers,
-            metadata={
-                "questions_processed": len(answers),
-                "document_url": request.documents,
-                "timestamp": time.time()
-            }
-        )
+        # Extract ONLY answer strings for platform compatibility
+        simple_answers = []
+        for ans in answers:
+            if isinstance(ans, dict) and "answer" in ans:
+                answer_text = str(ans["answer"]).strip()
+                # Ensure meaningful answer
+                if answer_text and len(answer_text) > 0:
+                    simple_answers.append(answer_text)
+                else:
+                    simple_answers.append("Unable to extract relevant information from the document")
+            else:
+                simple_answers.append("Processing failed")
         
-        # Send webhook if provided
+        # Send webhook if provided (with simple format)
         if request.webhook_url:
-            webhook_data = final_response.dict()
+            webhook_data = {"answers": simple_answers}
             await send_webhook(request.webhook_url, webhook_data)
         
-        return final_response
+        # Return EXACTLY what platform expects - only answers array
+        return {"answers": simple_answers}
         
     except asyncio.TimeoutError:
-        processing_time = time.time() - start_time
-        return QuestionResponse(
-            success=False,
-            status="timeout",
-            processing_time=round(processing_time, 2),
-            answers=[],
-            metadata={"error": "Request timeout - try fewer questions"}
-        )
+        # Even timeout should return proper format
+        return {"answers": ["Request timeout - unable to process questions within time limit"]}
     except HTTPException:
         raise
     except Exception as e:
-        processing_time = time.time() - start_time
-        return QuestionResponse(
-            success=False,
-            status="error",
-            processing_time=round(processing_time, 2),
-            answers=[],
-            metadata={"error": str(e)}
-        )
-    finally:
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-            except:
-                pass
-
+        # Even errors should return proper format
+        return {"answers": [f"Processing error occurred: {str(e)}"]}
 
 @app.post("/webhook/callback")
 async def webhook_callback(request: Request):
@@ -353,9 +311,6 @@ async def webhook_callback(request: Request):
     try:
         data = await request.json()
         print("Webhook received:", json.dumps(data, indent=2))
-        
-        # You can add custom processing logic here
-        # For example: store in database, trigger other processes, etc.
         
         return {
             "status": "received",
@@ -375,11 +330,11 @@ async def root():
         "message": "Enhanced Hackathon PDF QA API is running",
         "version": "2.0.0",
         "features": [
-            "Structured JSON responses",
-            "Clause extraction and citation",
-            "Confidence scoring",
-            "Webhook support",
-            "Robust answer extraction"
+            "Platform-compatible simple response format",
+            "Optimized PDF processing",
+            "AI-powered question answering",
+            "Vector-based document search",
+            "Robust error handling"
         ],
         "endpoints": ["/hackrx/run", "/webhook/callback", "/health"]
     }
@@ -388,8 +343,8 @@ async def root():
 async def health_check():
     return {
         "status": "healthy", 
-        "service": "enhanced-pdf-qa-api",
-        "features_active": ["pdf_processing", "ai_qa", "webhooks", "structured_output"]
+        "service": "hackrx-pdf-qa-api",
+        "format": "platform-compatible"
     }
 
 if __name__ == "__main__":
