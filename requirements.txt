@@ -1,22 +1,21 @@
-pip>=25.2
-langchain==0.0.350
-langchain-community==0.3.27
-pydantic>=2.0.0,<3
-PyPDF2==3.0.1
-python-dotenv==1.1.1
-streamlit==1.48.0
-openai==1.99.6
-faiss-cpu==1.11.0.post1
-altair==5.5.0
-tiktoken==0.5.2
-langchain-google-genai==2.0.0
-google-generativeai==0.4.0
-sentence-transformers==2.2.2
-transformers==4.30.2
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-requests==2.31.0
-httpx==0.25.2
+langchain
+langchain-community
+pydantic
+PyPDF2
+python-dotenv
+streamlit
+openai
+faiss-cpu
+altair
+tiktoken
+langchain-google-genai
+google-generativeai
+sentence-transformers
+transformers
+fastapi
+uvicorn[standard]
+requests
+httpx
 
 # uncomment to use huggingface llms
 # huggingface-hub==0.14.1
