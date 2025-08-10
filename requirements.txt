@@ -5,7 +5,7 @@ streamlit==1.48.0
 openai==1.99.6
 faiss-cpu==1.11.0.post1
 altair==5.5.0
-tiktoken==1.0.22
+tiktoken==0.5.2
 langchain-google-genai==2.0.0
 google-generativeai
 sentence-transformers
