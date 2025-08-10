@@ -1,6 +1,6 @@
-langchain==0.0.240
-langchain-community==0.0.35
-pydantic>=1.10.7,<2
+langchain==0.0.310
+langchain-community==0.0.41
+pydantic>=2.0.0,<3
 PyPDF2==3.0.1
 python-dotenv==1.1.1
 streamlit==1.48.0
@@ -9,9 +9,9 @@ faiss-cpu==1.11.0.post1
 altair==5.5.0
 tiktoken==0.5.2
 langchain-google-genai==2.0.0
-google-generativeai
-sentence-transformers
-transformers
+google-generativeai==0.4.0
+sentence-transformers==2.2.2
+transformers==4.30.2
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 requests==2.31.0
