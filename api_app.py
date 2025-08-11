@@ -5,6 +5,8 @@ from typing import List, Optional
 import requests
 import os
 import json
+import asyncio
+import time
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
@@ -14,6 +16,7 @@ from langchain.chains import ConversationalRetrievalChain
 import io
 import tempfile
 import shutil
+
 
 load_dotenv()
 
@@ -34,7 +37,12 @@ class EnhancedAnswer(BaseModel):
     confidence: float
 
 class QuestionResponse(BaseModel):
-    answers: List[EnhancedAnswer]
+    success: bool = True
+    status: str = "completed"
+    processing_time: Optional[float] = None
+    answers: List[dict]
+    metadata: Optional[dict] = None
+
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_KEY:
@@ -100,30 +108,35 @@ Respond ONLY in the following JSON format:
 If you cannot find specific information, be honest and provide a lower confidence score.
 """
 
-def download_pdf(url: str) -> str:
-    """Download PDF from URL and extract text"""
+def download_pdf_optimized(url: str) -> str:
+    """Ultra-fast PDF download with streaming"""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         
-        pdf_content = io.BytesIO(response.content)
-        pdf_reader = PdfReader(pdf_content)
+        # Stream download for faster processing
+        with requests.get(url, headers=headers, timeout=20, stream=True, verify=False) as response:
+            response.raise_for_status()
+            
+            # Read in chunks for memory efficiency
+            content = b""
+            for chunk in response.iter_content(chunk_size=8192):
+                content += chunk
+                if len(content) > 10 * 1024 * 1024:  # Limit to 10MB
+                    break
         
+        pdf_reader = PdfReader(io.BytesIO(content))
+        
+        # Process only first 10 pages for speed
         text = ""
-        for page_num, page in enumerate(pdf_reader.pages, 1):
-            page_text = page.extract_text()
-            # Add page markers for better clause identification
-            text += f"\n--- PAGE {page_num} ---\n{page_text}\n"
+        for page in pdf_reader.pages[:10]:
+            text += page.extract_text() + "\n"
+            if len(text) > 50000:  # Limit text length
+                break
         
         return text
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error downloading or processing PDF: {str(e)}"
-        )
+        raise HTTPException(400, f"PDF error: {str(e)}")
+
 
 def get_text_chunks(text: str):
     """Split text into chunks with metadata"""
@@ -196,8 +209,10 @@ async def process_questions(
     request: QuestionRequest,
     token: str = Depends(verify_token)
 ):
-    """Enhanced: Process questions with structured output and webhook support"""
+    """Speed-optimized processing with status tracking"""
+    start_time = time.time()
     temp_dir = None
+    
     try:
         # Validation
         if not request.documents:
@@ -206,96 +221,131 @@ async def process_questions(
         if not request.questions:
             raise HTTPException(400, "At least one question is required")
         
-        # Download and process PDF
-        pdf_text = download_pdf(request.documents)
-        if not pdf_text.strip():
-            raise HTTPException(400, "No text content found in PDF")
+        # Limit questions for speed
+        questions = request.questions[:3]  # Max 3 questions
         
-        # Setup enhanced QA system
-        qa_system, temp_dir, vectorstore = setup_enhanced_qa_system(pdf_text)
-        
-        # Process each question with enhanced output
-        enhanced_answers = []
-        for question in request.questions:
-            if not question.strip():
-                enhanced_answers.append(EnhancedAnswer(
-                    answer="Invalid or empty question provided.",
-                    matched_clauses=[],
-                    rationale="Question was empty or invalid",
-                    confidence=0.0
-                ))
-                continue
-                
-            try:
-                # Get relevant context first
-                relevant_docs = vectorstore.similarity_search(question, k=3)
-                context = "\n\n".join([doc.page_content for doc in relevant_docs])
-                
-                # Create enhanced prompt
-                enhanced_prompt = create_enhanced_prompt(question, context)
-                
-                # Get LLM response
-                response = qa_system({'question': enhanced_prompt})
-                raw_answer = extract_answer(response)
-                
-                # Try to parse structured JSON response
-                parsed_json = safe_json_parse(raw_answer)
-                
-                if parsed_json and all(key in parsed_json for key in ["answer", "confidence"]):
-                    # Use structured response
-                    enhanced_answer = EnhancedAnswer(
-                        answer=parsed_json["answer"],
-                        matched_clauses=parsed_json.get("matched_clauses", []),
-                        rationale=parsed_json.get("rationale", "AI-generated response"),
-                        confidence=float(parsed_json["confidence"])
-                    )
-                else:
-                    # Fallback to simple response with extracted clauses
-                    matched_clauses = []
-                    if hasattr(response, 'source_documents'):
-                        for i, doc in enumerate(response.source_documents[:3]):
-                            matched_clauses.append({
-                                "clause_number": f"Section {i+1}",
-                                "text": doc.page_content[:200] + "..."
-                            })
+        # Fast processing with timeout
+        async def fast_process():
+            # Download and process PDF
+            pdf_text = download_pdf_optimized(request.documents)
+            if not pdf_text.strip():
+                raise HTTPException(400, "No text content found in PDF")
+            
+            # Setup QA system
+            qa_system, temp_dir, vectorstore = setup_enhanced_qa_system(pdf_text)
+            
+            # Process questions
+            answers = []
+            for question in questions:
+                if not question.strip():
+                    answers.append({
+                        "answer": "Invalid or empty question provided.",
+                        "matched_clauses": [],
+                        "rationale": "Question was empty or invalid",
+                        "confidence": 0.0
+                    })
+                    continue
                     
-                    enhanced_answer = EnhancedAnswer(
-                        answer=raw_answer,
-                        matched_clauses=matched_clauses,
-                        rationale="Generated from document analysis with clause extraction",
-                        confidence=0.75
-                    )
-                
-                enhanced_answers.append(enhanced_answer)
-                
-            except Exception as e:
-                enhanced_answers.append(EnhancedAnswer(
-                    answer=f"Error processing question: {str(e)}",
-                    matched_clauses=[],
-                    rationale="Error occurred during processing",
-                    confidence=0.0
-                ))
+                try:
+                    # Get relevant context
+                    relevant_docs = vectorstore.similarity_search(question, k=3)
+                    context = "\n\n".join([doc.page_content for doc in relevant_docs])
+                    
+                    # Create enhanced prompt
+                    enhanced_prompt = create_enhanced_prompt(question, context)
+                    
+                    # Get LLM response
+                    response = qa_system({'question': enhanced_prompt})
+                    raw_answer = extract_answer(response)
+                    
+                    # Try to parse JSON response
+                    parsed_json = safe_json_parse(raw_answer)
+                    
+                    if parsed_json and "answer" in parsed_json:
+                        answers.append({
+                            "answer": parsed_json["answer"],
+                            "matched_clauses": parsed_json.get("matched_clauses", []),
+                            "rationale": parsed_json.get("rationale", "AI-generated response"),
+                            "confidence": float(parsed_json.get("confidence", 0.75))
+                        })
+                    else:
+                        # Fallback response
+                        matched_clauses = []
+                        if hasattr(response, 'source_documents') and response.source_documents:
+                            for i, doc in enumerate(response.source_documents[:3]):
+                                matched_clauses.append({
+                                    "clause_number": f"Section {i+1}",
+                                    "text": doc.page_content[:200] + "..."
+                                })
+                        
+                        answers.append({
+                            "answer": raw_answer[:500],
+                            "matched_clauses": matched_clauses,
+                            "rationale": "Generated from document analysis",
+                            "confidence": 0.75
+                        })
+                        
+                except Exception as e:
+                    answers.append({
+                        "answer": f"Error processing question: {str(e)}",
+                        "matched_clauses": [],
+                        "rationale": "Error occurred during processing",
+                        "confidence": 0.0
+                    })
+            
+            return answers
         
-        # Create final response
-        final_response = QuestionResponse(answers=enhanced_answers)
+        # Execute with timeout
+        answers = await asyncio.wait_for(fast_process(), timeout=25.0)
+        processing_time = time.time() - start_time
         
-        # Enhanced: Send to webhook if provided
+        # Create response with status
+        final_response = QuestionResponse(
+            success=True,
+            status="completed",
+            processing_time=round(processing_time, 2),
+            answers=answers,
+            metadata={
+                "questions_processed": len(answers),
+                "document_url": request.documents,
+                "timestamp": time.time()
+            }
+        )
+        
+        # Send webhook if provided
         if request.webhook_url:
             webhook_data = final_response.dict()
             await send_webhook(request.webhook_url, webhook_data)
         
         return final_response
         
+    except asyncio.TimeoutError:
+        processing_time = time.time() - start_time
+        return QuestionResponse(
+            success=False,
+            status="timeout",
+            processing_time=round(processing_time, 2),
+            answers=[],
+            metadata={"error": "Request timeout - try fewer questions"}
+        )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Internal server error: {str(e)}")
+        processing_time = time.time() - start_time
+        return QuestionResponse(
+            success=False,
+            status="error",
+            processing_time=round(processing_time, 2),
+            answers=[],
+            metadata={"error": str(e)}
+        )
     finally:
         if temp_dir and os.path.exists(temp_dir):
             try:
                 shutil.rmtree(temp_dir)
             except:
                 pass
+
 
 @app.post("/webhook/callback")
 async def webhook_callback(request: Request):
